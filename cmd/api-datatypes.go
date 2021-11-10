@@ -37,6 +37,8 @@ type DeletedObject struct {
 	VersionPurgeStatus VersionPurgeStatusType `xml:"VersionPurgeStatus,omitempty"`
 	// PurgeTransitioned is nonempty if object is in transition tier
 	PurgeTransitioned string `xml:"PurgeTransitioned,omitempty"`
+	// Size of the deleted object.
+	Size int64
 }
 
 // DeleteMarkerMTime is an embedded type containing time.Time for XML marshal

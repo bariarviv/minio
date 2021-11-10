@@ -797,9 +797,10 @@ func (er erasureObjects) putObject(ctx context.Context, bucket string, object st
 	return fi.ToObjectInfo(bucket, object), nil
 }
 
-func (er erasureObjects) deleteObjectVersion(ctx context.Context, bucket, object string, writeQuorum int, fi FileInfo, forceDelMarker bool) error {
+func (er erasureObjects) deleteObjectVersion(ctx context.Context, bucket, object string, writeQuorum int, fi FileInfo, forceDelMarker bool) (int64, error) {
 	defer ObjectPathUpdated(pathJoin(bucket, object))
 	disks := er.getDisks()
+	var size int64
 	g := errgroup.WithNErrs(len(disks))
 	for index := range disks {
 		index := index
@@ -807,11 +808,16 @@ func (er erasureObjects) deleteObjectVersion(ctx context.Context, bucket, object
 			if disks[index] == nil {
 				return errDiskNotFound
 			}
-			return disks[index].DeleteVersion(ctx, bucket, object, fi, forceDelMarker)
+			//return disks[index].DeleteVersion(ctx, bucket, object, fi, forceDelMarker)
+			s, err := disks[index].DeleteVersion(ctx, bucket, object, fi, forceDelMarker)
+			if s != 0 {
+				size = s
+			}
+			return err
 		}, index)
 	}
 	// return errors if any during deletion
-	return reduceWriteQuorumErrs(ctx, g.Wait(), objectOpIgnoredErrs, writeQuorum)
+	return size, reduceWriteQuorumErrs(ctx, g.Wait(), objectOpIgnoredErrs, writeQuorum)
 }
 
 // deleteEmptyDir knows only how to remove an empty directory (not the empty object with a
@@ -931,6 +937,7 @@ func (er erasureObjects) DeleteObjects(ctx context.Context, bucket string, objec
 
 	// Initialize list of errors.
 	var delObjErrs = make([][]error, len(storageDisks))
+	var sizes = make([][]int64, len(storageDisks))
 
 	var wg sync.WaitGroup
 	// Remove versions in bulk for each disk
@@ -945,7 +952,8 @@ func (er erasureObjects) DeleteObjects(ctx context.Context, bucket string, objec
 				}
 				return
 			}
-			delObjErrs[index] = disk.DeleteVersions(ctx, bucket, versions)
+			//delObjErrs[index] = disk.DeleteVersions(ctx, bucket, versions)
+			sizes[index], delObjErrs[index] = disk.DeleteVersions(ctx, bucket, versions)
 		}(index, disk)
 	}
 
@@ -954,12 +962,16 @@ func (er erasureObjects) DeleteObjects(ctx context.Context, bucket string, objec
 	// Reduce errors for each object
 	for objIndex := range objects {
 		diskErrs := make([]error, len(storageDisks))
+		var size int64
 		// Iterate over disks to fetch the error
 		// of deleting of the current object
 		for i := range delObjErrs {
 			// delObjErrs[i] is not nil when disks[i] is also not nil
 			if delObjErrs[i] != nil {
 				diskErrs[i] = delObjErrs[i][objIndex]
+			}
+			if sizes[i][objIndex] != 0 {
+				size = sizes[i][objIndex]
 			}
 		}
 		err := reduceWriteQuorumErrs(ctx, diskErrs, objectOpIgnoredErrs, writeQuorums[objIndex])
@@ -982,6 +994,7 @@ func (er erasureObjects) DeleteObjects(ctx context.Context, bucket string, objec
 				ObjectName:                    versions[objIndex].Name,
 				VersionPurgeStatus:            versions[objIndex].VersionPurgeStatus,
 				PurgeTransitioned:             objects[objIndex].PurgeTransitioned,
+				Size:                          size,
 			}
 		} else {
 			dobjects[objIndex] = DeletedObject{
@@ -990,6 +1003,7 @@ func (er erasureObjects) DeleteObjects(ctx context.Context, bucket string, objec
 				VersionPurgeStatus:            versions[objIndex].VersionPurgeStatus,
 				DeleteMarkerReplicationStatus: versions[objIndex].DeleteMarkerReplicationStatus,
 				PurgeTransitioned:             objects[objIndex].PurgeTransitioned,
+				Size:                          size,
 			}
 		}
 	}
@@ -1073,6 +1087,7 @@ func (er erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 	if opts.MTime.IsZero() {
 		modTime = UTCNow()
 	}
+	var objectSize int64
 	if markDelete {
 		if opts.Versioned || opts.VersionSuspended {
 			fi := FileInfo{
@@ -1095,15 +1110,17 @@ func (er erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 			// version as delete marker
 			// Add delete marker, since we don't have any version specified explicitly.
 			// Or if a particular version id needs to be replicated.
-			if err = er.deleteObjectVersion(ctx, bucket, object, writeQuorum, fi, opts.DeleteMarker); err != nil {
+			/////if err = er.deleteObjectVersion(ctx, bucket, object, writeQuorum, fi, opts.DeleteMarker); err != nil {
+			if objectSize, err = er.deleteObjectVersion(ctx, bucket, object, writeQuorum, fi, opts.DeleteMarker); err != nil {
 				return objInfo, toObjectErr(err, bucket, object)
 			}
+			fi.Size = objectSize
 			return fi.ToObjectInfo(bucket, object), nil
 		}
 	}
 
 	// Delete the object version on all disks.
-	if err = er.deleteObjectVersion(ctx, bucket, object, writeQuorum, FileInfo{
+	if objectSize, err = er.deleteObjectVersion(ctx, bucket, object, writeQuorum, FileInfo{
 		Name:                          object,
 		VersionID:                     opts.VersionID,
 		MarkDeleted:                   markDelete,
@@ -1113,6 +1130,16 @@ func (er erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 		VersionPurgeStatus:            opts.VersionPurgeStatus,
 		TransitionStatus:              opts.TransitionStatus,
 	}, opts.DeleteMarker); err != nil {
+	/*if err = er.deleteObjectVersion(ctx, bucket, object, writeQuorum, FileInfo{
+		Name:                          object,
+		VersionID:                     opts.VersionID,
+		MarkDeleted:                   markDelete,
+		Deleted:                       deleteMarker,
+		ModTime:                       modTime,
+		DeleteMarkerReplicationStatus: opts.DeleteMarkerReplicationStatus,
+		VersionPurgeStatus:            opts.VersionPurgeStatus,
+		TransitionStatus:              opts.TransitionStatus,
+	}, opts.DeleteMarker); err != nil {*/
 		return objInfo, toObjectErr(err, bucket, object)
 	}
 
@@ -1130,6 +1157,7 @@ func (er erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 		VersionID:          opts.VersionID,
 		VersionPurgeStatus: opts.VersionPurgeStatus,
 		ReplicationStatus:  replication.StatusType(opts.DeleteMarkerReplicationStatus),
+		Size:               objectSize,
 	}, nil
 }
 

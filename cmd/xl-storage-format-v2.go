@@ -236,6 +236,22 @@ type xlMetaV2 struct {
 	data xlMetaInlineData `msg:"-"`
 }
 
+func GetSizeFromXlMeta(meta *xlMetaV2, versionID string) int64 {
+	if versionID == "" && len(meta.Versions) == 1 && meta.Versions[0].Type == ObjectType && meta.Versions[0].ObjectV2 != nil {
+		return meta.Versions[0].ObjectV2.Size
+	}
+	uv, err := uuid.Parse(versionID)
+	if err != nil {
+		return 0
+	}
+	for _, version := range meta.Versions {
+		if version.Type == ObjectType && version.ObjectV2 != nil && version.ObjectV2.VersionID == uv {
+			return version.ObjectV2.Size
+		}
+	}
+	return 0
+}
+
 // xlMetaInlineData is serialized data in [string][]byte pairs.
 //
 //msgp:ignore xlMetaInlineData

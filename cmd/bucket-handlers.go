@@ -625,6 +625,7 @@ func (api objectAPIHandlers) DeleteMultipleObjectsHandler(w http.ResponseWriter,
 			Name:         dobj.ObjectName,
 			VersionID:    dobj.VersionID,
 			DeleteMarker: dobj.DeleteMarker,
+			Size:         dobj.Size,
 		}
 
 		if objInfo.DeleteMarker {

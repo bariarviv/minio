@@ -317,10 +317,13 @@ func (s *storageRESTServer) DeleteVersionHandler(w http.ResponseWriter, r *http.
 		return
 	}
 
-	err = s.storage.DeleteVersion(r.Context(), volume, filePath, fi, forceDelMarker)
+	//err = s.storage.DeleteVersion(r.Context(), volume, filePath, fi, forceDelMarker)
+	size, err := s.storage.DeleteVersion(r.Context(), volume, filePath, fi, forceDelMarker)
 	if err != nil {
 		s.writeErrorResponse(w, err)
 	}
+	gob.NewEncoder(w).Encode(&size)
+	w.(http.Flusher).Flush()
 }
 
 // ReadVersion read metadata of versionID
@@ -605,10 +608,15 @@ func (s *storageRESTServer) DeleteFileHandler(w http.ResponseWriter, r *http.Req
 	}
 }
 
-// DeleteVersionsErrsResp - collection of delete errors
+/*// DeleteVersionsErrsResp - collection of delete errors
 // for bulk version deletes
 type DeleteVersionsErrsResp struct {
 	Errs []error
+}*/
+// DeleteVersionsResp - collection of delete errors
+type DeleteVersionsResp struct {
+	Errs []error
+	Size []int64
 }
 
 // DeleteVersionsHandler - delete a set of a versions.
@@ -636,19 +644,24 @@ func (s *storageRESTServer) DeleteVersionsHandler(w http.ResponseWriter, r *http
 		}
 	}
 
-	dErrsResp := &DeleteVersionsErrsResp{Errs: make([]error, totalVersions)}
+	//dErrsResp := &DeleteVersionsErrsResp{Errs: make([]error, totalVersions)}
+	dResp := &DeleteVersionsResp{Errs: make([]error, totalVersions), Size: make([]int64, totalVersions)}
 
 	setEventStreamHeaders(w)
 	encoder := gob.NewEncoder(w)
 	done := keepHTTPResponseAlive(w)
-	errs := s.storage.DeleteVersions(r.Context(), volume, versions)
+	//errs := s.storage.DeleteVersions(r.Context(), volume, versions)
+	sizes, errs := s.storage.DeleteVersions(r.Context(), volume, versions)
 	done(nil)
 	for idx := range versions {
 		if errs[idx] != nil {
-			dErrsResp.Errs[idx] = StorageErr(errs[idx].Error())
+			//dErrsResp.Errs[idx] = StorageErr(errs[idx].Error())
+			dResp.Errs[idx] = StorageErr(errs[idx].Error())
 		}
+		dResp.Size[idx] = sizes[idx]
 	}
-	encoder.Encode(dErrsResp)
+	//encoder.Encode(dErrsResp)
+	encoder.Encode(dResp)
 	w.(http.Flusher).Flush()
 }
 

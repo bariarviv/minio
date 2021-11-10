@@ -783,66 +783,71 @@ func (s *xlStorage) ListDir(ctx context.Context, volume, dirPath string, count i
 
 // DeleteVersions deletes slice of versions, it can be same object
 // or multiple objects.
-func (s *xlStorage) DeleteVersions(ctx context.Context, volume string, versions []FileInfo) []error {
+func (s *xlStorage) DeleteVersions(ctx context.Context, volume string, versions []FileInfo) ([]int64, []error) {
 	errs := make([]error, len(versions))
+	sizes := make([]int64, len(versions))
 
 	for i, version := range versions {
-		if err := s.DeleteVersion(ctx, volume, version.Name, version, false); err != nil {
+		//if err := s.DeleteVersion(ctx, volume, version.Name, version, false); err != nil {
+		if size, err := s.DeleteVersion(ctx, volume, version.Name, version, false); err != nil {
 			errs[i] = err
+		} else {
+			sizes[i] = size
 		}
 	}
 
-	return errs
+	return sizes, errs
 }
 
 // DeleteVersion - deletes FileInfo metadata for path at `xl.meta`. forceDelMarker
 // will force creating a new `xl.meta` to create a new delete marker
-func (s *xlStorage) DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool) error {
+func (s *xlStorage) DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool) (int64, error) {
 	if HasSuffix(path, SlashSeparator) {
-		return s.Delete(ctx, volume, path, false)
+		return 0, s.Delete(ctx, volume, path, false)
 	}
 
 	buf, err := s.ReadAll(ctx, volume, pathJoin(path, xlStorageFormatFile))
 	if err != nil {
 		if err != errFileNotFound {
-			return err
+			return 0, err
 		}
 		if fi.Deleted && forceDelMarker {
 			// Create a new xl.meta with a delete marker in it
-			return s.WriteMetadata(ctx, volume, path, fi)
+			return 0, s.WriteMetadata(ctx, volume, path, fi)
 		}
 		if fi.VersionID != "" {
-			return errFileVersionNotFound
+			return 0, errFileVersionNotFound
 		}
-		return errFileNotFound
+		return 0, errFileNotFound
 	}
 
 	if len(buf) == 0 {
 		if fi.VersionID != "" {
-			return errFileVersionNotFound
+			return 0, errFileVersionNotFound
 		}
-		return errFileNotFound
+		return 0, errFileNotFound
 	}
 
 	volumeDir, err := s.getVolDir(volume)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	if !isXL2V1Format(buf) {
 		// Delete the meta file, if there are no more versions the
 		// top level parent is automatically removed.
-		return s.deleteFile(volumeDir, pathJoin(volumeDir, path), true)
+		return 0, s.deleteFile(volumeDir, pathJoin(volumeDir, path), true)
 	}
 
 	var xlMeta xlMetaV2
 	if err = xlMeta.Load(buf); err != nil {
-		return err
+		return 0, err
 	}
 
+	size := GetSizeFromXlMeta(&xlMeta, fi.VersionID)
 	dataDir, lastVersion, err := xlMeta.DeleteVersion(fi)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	// transitioned objects maintains metadata on the source cluster. When transition
@@ -864,39 +869,39 @@ func (s *xlStorage) DeleteVersion(ctx context.Context, volume, path string, fi F
 
 			filePath := pathJoin(volumeDir, path, dataDir)
 			if err = checkPathLength(filePath); err != nil {
-				return err
+				return 0, err
 			}
 
 			tmpuuid := mustGetUUID()
 			if err = renameAll(filePath, pathutil.Join(s.diskPath, minioMetaTmpDeletedBucket, tmpuuid)); err != nil {
 				if err != errFileNotFound {
-					return err
+					return 0, err
 				}
 			}
 		}
 
 		buf, err = xlMeta.AppendTo(nil)
 		if err != nil {
-			return err
+			return 0, err
 		}
 
-		return s.WriteAll(ctx, volume, pathJoin(path, xlStorageFormatFile), buf)
+		return 0, s.WriteAll(ctx, volume, pathJoin(path, xlStorageFormatFile), buf)
 	}
 
 	// Move everything to trash.
 	filePath := retainSlash(pathJoin(volumeDir, path))
 	if err = checkPathLength(filePath); err != nil {
-		return err
+		return 0, err
 	}
 	err = renameAll(filePath, pathutil.Join(s.diskPath, minioMetaTmpDeletedBucket, mustGetUUID()))
 
 	// Delete parents if needed.
 	filePath = retainSlash(pathutil.Dir(pathJoin(volumeDir, path)))
 	if filePath == retainSlash(volumeDir) {
-		return err
+		return 0, err
 	}
 	s.deleteFile(volumeDir, filePath, false)
-	return err
+	return size, err
 }
 
 // Updates only metadata for a given version.

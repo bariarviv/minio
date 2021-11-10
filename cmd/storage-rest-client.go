@@ -370,7 +370,7 @@ func (client *storageRESTClient) UpdateMetadata(ctx context.Context, volume, pat
 	return err
 }
 
-func (client *storageRESTClient) DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool) error {
+func (client *storageRESTClient) DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool) (size int64, err error) {
 	values := make(url.Values)
 	values.Set(storageRESTVolume, volume)
 	values.Set(storageRESTFilePath, path)
@@ -378,12 +378,14 @@ func (client *storageRESTClient) DeleteVersion(ctx context.Context, volume, path
 
 	var buffer bytes.Buffer
 	if err := msgp.Encode(&buffer, &fi); err != nil {
-		return err
+		return 0, err
 	}
 
 	respBody, err := client.call(ctx, storageRESTMethodDeleteVersion, values, &buffer, -1)
 	defer xhttp.DrainBody(respBody)
-	return err
+	//return err
+	err = gob.NewDecoder(respBody).Decode(&size)
+	return size, err
 }
 
 // WriteAll - write all data to a file.
@@ -555,9 +557,9 @@ func (client *storageRESTClient) Delete(ctx context.Context, volume string, path
 }
 
 // DeleteVersions - deletes list of specified versions if present
-func (client *storageRESTClient) DeleteVersions(ctx context.Context, volume string, versions []FileInfo) (errs []error) {
+func (client *storageRESTClient) DeleteVersions(ctx context.Context, volume string, versions []FileInfo) (sizes []int64, errs []error) {
 	if len(versions) == 0 {
-		return errs
+		return sizes, errs
 	}
 
 	values := make(url.Values)
@@ -572,6 +574,7 @@ func (client *storageRESTClient) DeleteVersions(ctx context.Context, volume stri
 	logger.LogIf(ctx, encoder.Flush())
 
 	errs = make([]error, len(versions))
+	sizes = make([]int64, len(versions))
 
 	respBody, err := client.call(ctx, storageRESTMethodDeleteVersions, values, &buffer, -1)
 	defer xhttp.DrainBody(respBody)
@@ -579,7 +582,7 @@ func (client *storageRESTClient) DeleteVersions(ctx context.Context, volume stri
 		for i := range errs {
 			errs[i] = err
 		}
-		return errs
+		return sizes, errs
 	}
 
 	reader, err := waitForHTTPResponse(respBody)
@@ -587,22 +590,26 @@ func (client *storageRESTClient) DeleteVersions(ctx context.Context, volume stri
 		for i := range errs {
 			errs[i] = err
 		}
-		return errs
+		return sizes, errs
 	}
 
-	dErrResp := &DeleteVersionsErrsResp{}
-	if err = gob.NewDecoder(reader).Decode(dErrResp); err != nil {
+	//dErrResp := &DeleteVersionsErrsResp{}
+	//if err = gob.NewDecoder(reader).Decode(dErrResp); err != nil {
+	dResp := &DeleteVersionsResp{}
+	if err = gob.NewDecoder(reader).Decode(dResp); err != nil {
 		for i := range errs {
 			errs[i] = err
 		}
-		return errs
+		return sizes, errs
 	}
 
-	for i, dErr := range dErrResp.Errs {
+	//for i, dErr := range dErrResp.Errs {
+	for i, dErr := range dResp.Errs {
 		errs[i] = toStorageErr(dErr)
+		sizes[i] = dResp.Size[i]
 	}
 
-	return errs
+	return sizes, errs
 }
 
 // RenameFile - renames a file.

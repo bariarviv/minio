@@ -465,7 +465,7 @@ func (p *xlStorageDiskIDCheck) Delete(ctx context.Context, volume string, path s
 
 // DeleteVersions deletes slice of versions, it can be same object
 // or multiple objects.
-func (p *xlStorageDiskIDCheck) DeleteVersions(ctx context.Context, volume string, versions []FileInfo) (errs []error) {
+func (p *xlStorageDiskIDCheck) DeleteVersions(ctx context.Context, volume string, versions []FileInfo) (sizes []int64, errs []error) {
 	// Mererly for tracing storage
 	path := ""
 	if len(versions) > 0 {
@@ -475,13 +475,14 @@ func (p *xlStorageDiskIDCheck) DeleteVersions(ctx context.Context, volume string
 	defer p.updateStorageMetrics(storageMetricDeleteVersions, volume, path)()
 
 	errs = make([]error, len(versions))
+	sizes = make([]int64, len(versions))
 
 	select {
 	case <-ctx.Done():
 		for i := range errs {
 			errs[i] = ctx.Err()
 		}
-		return errs
+		return sizes, errs
 	default:
 	}
 
@@ -489,7 +490,7 @@ func (p *xlStorageDiskIDCheck) DeleteVersions(ctx context.Context, volume string
 		for i := range errs {
 			errs[i] = err
 		}
-		return errs
+		return sizes, errs
 	}
 
 	return p.storage.DeleteVersions(ctx, volume, versions)
@@ -527,17 +528,17 @@ func (p *xlStorageDiskIDCheck) WriteAll(ctx context.Context, volume string, path
 	return p.storage.WriteAll(ctx, volume, path, b)
 }
 
-func (p *xlStorageDiskIDCheck) DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool) (err error) {
+func (p *xlStorageDiskIDCheck) DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool) (size int64, err error) {
 	defer p.updateStorageMetrics(storageMetricDeleteVersion, volume, path)()
 
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return 0, ctx.Err()
 	default:
 	}
 
 	if err = p.checkDiskStale(); err != nil {
-		return err
+		return 0, err
 	}
 
 	return p.storage.DeleteVersion(ctx, volume, path, fi, forceDelMarker)

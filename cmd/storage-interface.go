@@ -52,8 +52,8 @@ type StorageAPI interface {
 	WalkDir(ctx context.Context, opts WalkDirOptions, wr io.Writer) error
 
 	// Metadata operations
-	DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool) error
-	DeleteVersions(ctx context.Context, volume string, versions []FileInfo) []error
+	DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool) (int64, error)
+	DeleteVersions(ctx context.Context, volume string, versions []FileInfo) ([]int64, []error)
 	WriteMetadata(ctx context.Context, volume, path string, fi FileInfo) error
 	UpdateMetadata(ctx context.Context, volume, path string, fi FileInfo) error
 	ReadVersion(ctx context.Context, volume, path, versionID string, readData bool) (FileInfo, error)
